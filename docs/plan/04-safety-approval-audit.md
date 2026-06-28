@@ -142,6 +142,20 @@ Decision ∈ {AUTO_ALLOW, REQUIRE_APPROVAL, DENY}
 
 > 클라우드/BaaS 단계 정책 주석은 §8에 집약(D7·D9·D10·P11이 그 단계에서 활성화). 로컬 범위에선 실제 대상이 목 서버뿐이어도 위 분류는 **그대로 강제**한다(§7).
 
+### 2.4 정책 술어 → 스키마 필드 매핑
+
+`POLICY_RULES`는 자연어 조건이 아니라 아래 필드 조합으로만 평가한다. 이 표가 `policy.py` 단위테스트의 입력 생성 기준이다.
+
+| 판정 축 | 참조 필드 | 자동/승인/거부 판단 |
+|---|---|---|
+| 대상 환경 | `UserIntent.target_env`, `ApprovalRequest.environment` | `local`+번들 목 서버만 자동 허용 후보. `staging`/`prod-like`는 P3, `prod`는 D1 |
+| 대상 서비스 | `UserIntent.target_service`, `ScenarioTemplate.target_whitelist`, `TestPlanSpec.data_policy` | whitelist 밖이면 D7/D9/D10 후보. 로컬 목 서버 식별자는 `mock-target`만 허용 |
+| 엔드포인트 부작용 | `UserIntent.endpoints[].is_write`, `UserIntent.destructive_allowed`, `ToolAction.operation` | write 경로는 기본 P9, 결제/email/SMS/destructive 경로는 D2. `destructive_allowed=false`면 write도 clamp/거부 |
+| 실행 단계 | `ToolAction.operation`, `ToolAction.dry_run`, `ToolAction.approval_status` | `query`/정적 `plan`/`dry_run=true`는 A 후보. `submit`/`canary`/`run`은 승인·목서버·상한 검사를 통과해야 함 |
+| 비용·부하 상한 | `TestPlanSpec.max_blast_radius`, `ToolAction.max_cost`, `safe_limits`, `cost_estimate` | 상한 이내 low blast radius만 자동 후보. 상향은 P5, 고비용/장시간은 P7 |
+| 생성기/대상 분리 | `ProvisionSpec.topology`, `ProvisionSpec.runner_location`, `runner_provider`, `target_provider`, `network_path`, `identity`, `ToolAction.tool` | L0 목타깃만 자동 후보. L1 remote-container는 target이 mock이 아니면 P3/P5. `managed-cloud`/OIDC/관리형 ID는 P6/P4 경로. `runner_provider != target_provider`인 X0는 양 Provider 정책·egress·allowlist 확인 없으면 DENY 후보. 장기 static identity는 예외 승인 없으면 D3 |
+| 매칭 신뢰도 | `TemplateMatch.decision`, `match_confidence`, `requester_expertise` | `reject`/`clarify`/`route-to-expert`는 실행 버튼 없음. `auto-proceed`라도 위험 정책은 별도 적용 |
+
 ---
 
 ## 3. clamp 로직 (`safety/clamp.py`)
@@ -208,9 +222,9 @@ clamp(slots, template, env, target) -> ClampResult:
 
 ### 4.1 plan_hash 정의
 
-`plan_hash`의 **정본 정의·정규화 규칙은 [[02-data-model]]** 참조. 본 문서는 운영 의미만 고정한다:
+`plan_hash`의 **정본 정의·정규화 규칙은 [[02-data-model]] §4** 참조. 본 문서는 운영 의미만 고정한다:
 
-- `plan_hash = H(canonical(plan_bundle))`. 입력에 포함되는 것: `UserIntent`(정규화)·`TemplateMatch`(matched_template_id+match_confidence)·`TestPlanSpec`(clamp 후 effective_slots 포함)·`ToolAction[]`(args·idempotency_key·timeout·dry_run)·템플릿 snapshot(template_id+version)·`safe_limits`.
+- `plan_hash = H(canonical(plan_bundle_core))`. 해시 입력은 [[02-data-model]]의 `TestPlanSpec_core`·`ToolAction_core[]`·`safe_limits`·`ProvisionSpec_core`와 동일하다. `idempotency_key`는 `plan_hash`에서 결정적으로 파생되므로 해시 입력에 넣지 않는다(순환 회피).
 - 정규화(canonical): 키 정렬·공백 제거·타임스탬프 등 비결정 필드 제외 → **동일 계획은 동일 hash**(결정성, §9 테스트 가능).
 - 계획의 어느 필드든 변경되면 hash가 변한다 → 승인 후 무단 변경 탐지.
 
@@ -218,11 +232,12 @@ clamp(slots, template, env, target) -> ClampResult:
 
 ```
 # 제어 평면: 계획 번들 확정 시
-bundle = build_plan_bundle(intent, match, plan_spec, tool_actions, template_snapshot)
-plan_hash = hash_canonical(bundle)              # [[02-data-model]] 정규화
+bundle = build_plan_bundle(intent, match, plan_spec, tool_actions, provision_spec, template_snapshot)
+plan_hash = compute_plan_hash(bundle.to_hash_core())  # [[02-data-model]] §4 정본
 approval = ApprovalRequest(
     approval_id, requested_actions=tool_actions,
     plan_hash=plan_hash,                         # 결속의 핵심
+    requester=requester_identity,                # self-review 차단 비교 대상
     blast_radius, cost_estimate, environment, risk_summary,
     expires_at = now() + APPROVAL_TTL,           # 만료(기본 15분, config; UI 표기와 일치 — [[07-web-ui-api]] §4)
     status="pending")
@@ -462,7 +477,7 @@ append-only. 모든 단계가 기록되어 재현·감사 가능해야 한다(OW
 | `metrics/logs/traces/artifact refs` | 관측·산출물 참조 | [[06-reporter-observability]] |
 | `report_version` + `model_version` + `prompt_version` | 보고서·모델·프롬프트 버전 | 재현 |
 | `confidence` | 해석 신뢰도(0~1) | 품질 |
-| `approver_identity` + `self_review_여부` | 승인자·self-approval 차단 적용 여부 | §4.4 |
+| `requester_identity` + `approver_identity` + `self_review_여부` | 요청자·승인자·self-approval 차단 적용 여부 | §4.4 |
 | `environment` + `blast_radius` | 대상 환경·영향 범위 | 분류 추적 |
 | `cost/token actuals vs ceiling` | 실제 비용/토큰 대비 상한 | LLM10·§6 |
 | `target_isolation_check` + 대상 프로젝트/조직 ID | 테스트 전용 프로젝트/계정/구독 여부(BaaS) | docs/research/05 §9(클라우드 단계) |

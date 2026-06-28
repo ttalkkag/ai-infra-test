@@ -42,7 +42,7 @@
 | `POST /run` | `RunRequest{ approval_id, plan_hash }` | `RunResponse{ run_id, RunRecord(state=Queued) }` | operator | **실행** | **유일 실행 트리거**. 승인된 `ToolAction[]`만 실행. `Idempotency-Key` 헤더 필수(중복 실행 차단) |
 | `GET /runs/{run_id}` | — | `RunRecord` | viewer | 읽기 | WS 단절 시 폴링 폴백·현재 상태 조회 |
 | `WS /run/{run_id}/stream` | (§2.2) | (§2.2) | operator(kill)/viewer(구독) | **실행** | 실시간 진행률·canary 판정·kill. `?from_seq=N` 재연결 |
-| `GET /report/{run_id}` | — | `FinalReport{ exec_summary, technical, evidence_refs[], limitations[], data_source, baseline_ref? }` | viewer | 읽기 | 실행 미완료 시 404/425(too early) |
+| `GET /report/{run_id}` | — | `FinalReport{ executive_summary, technical_summary, slo_results[], risk_assessment, recommendations[], artifacts[], limitations[], template_id, match_confidence }` | viewer | 읽기 | 실행 미완료 시 404/425(too early). 필드명은 [[02-data-model]]·[[06-reporter-observability]] 정본을 따른다 |
 | `GET /templates` | `?q=&intent=` | `TemplateListResponse{ items: ScenarioTemplate[] }` | viewer | 읽기 | 카탈로그. safe_limits·target_whitelist 노출(읽기) |
 | `GET /runs` | `?baseline=<run_id>&limit=&intent=` | `RunListResponse{ items: RunRecord[], baseline?: RunRecord, delta?{} }` | viewer | 읽기 | `baseline` 지정 시 p95/error_rate 등 delta 동봉([[06-reporter-observability]]) |
 
@@ -162,6 +162,8 @@ ApiError { code: string, message: string, detail?: object, retriable: bool }
 │  TestPlanSpec                                                │
 │   유형: 스파이크 | 대상: mock-target | VUs 500 | 3분         │
 │   상승 곡선: 0→500 (10s) 유지 → 감소                          │
+│   실행 토폴로지: L0 local-workstation → local-container → local│
+│   network_path: same-host                                    │
 │                                                              │
 │  ToolAction (실행될 작업)            도구: k6                 │
 │   ▸ dry-run 정적 검증  →  canary(5% · 30s)  →  full run       │
@@ -176,7 +178,7 @@ ApiError { code: string, message: string, detail?: object, retriable: bool }
 │  ⛔ 이 화면에는 실행 버튼이 없습니다.                         │
 └────────────────────────────────────────────────────────────┘
 ```
-모든 필드는 `GET /plan/{plan_id}` 응답을 그대로 렌더. **편집 불가**(편집하려면 ②로 돌아가 `plan_hash` 재계산).
+모든 필드는 `GET /plan/{plan_id}` 응답을 그대로 렌더. **편집 불가**(편집하려면 ②로 돌아가 `plan_hash` 재계산). 계획 검토 화면은 `ProvisionSpec.control_plane_location`/`runner_location`/`runner_provider`/`target_provider`/`network_path`를 표시해 L0/L1/C0/C1/X0 토폴로지를 사람이 확인할 수 있게 한다([[12-execution-topology-matrix]]).
 
 ### ④ 승인 (`/plan/:planId/approve`)
 

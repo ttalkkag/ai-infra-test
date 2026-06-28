@@ -18,7 +18,7 @@
 | # | 결정 항목 | 확정 내용 | 비고 |
 |---|---|---|---|
 | D1 | 산출물 형태 | **웹 서비스** (전용 데스크톱 프로그램 아님) | 사용자 결정 |
-| D2 | 배포 단계 | **로컬(맥북) 우선 → 검증 후 클라우드/사내 서버** | 사용자 결정 |
+| D2 | 배포 단계 | **L0 로컬(맥북/CI 컨테이너) 우선 → 검증 후 L1/C0/C1/X0 토폴로지 선택** | 로컬/클라우드의 정확한 조합은 [[12-execution-topology-matrix]]가 정본 |
 | D3 | 백엔드 스택 | **Python + FastAPI** | 사용자 결정 |
 | D4 | 프론트엔드 | **React (Vite) SPA** | 제어/실행 평면 분리·인터랙티브 슬롯/승인/리포트 UI |
 | D5 | LLM 연동 | **provider 추상화 인터페이스 + 호스티드·로컬 어댑터 둘 다 초기 지원** | 교체 잦음 전제 |
@@ -28,6 +28,7 @@
 | D9 | 테스트 가능성 | **"구현 코드 대부분이 자동 테스트 가능"을 1급 설계 원칙으로 채택** | 사용자 강조 ([[09-testing-strategy]]) |
 | D10 | 영속화 | 로컬은 **SQLite + SQLAlchemy**, 클라우드 단계에서 Postgres 검토 | 단순·로컬 우선 |
 | D11 | 클라우드 실행(Terraform apply, ephemeral runner) | **설계만, 로컬 범위에서 제외**. 별도 후속 단계 | [[08-milestones-roadmap]] M5+ |
+| D12 | 로컬/클라우드 토폴로지 | `local/cloud`를 단일 플래그로 쓰지 않고 **제어 평면 위치·러너 위치·러너 Provider·대상 Provider·네트워크 경로**로 분리 | AWS 대상 + GCP 러너 같은 cross-cloud도 표현 |
 
 ---
 
@@ -38,6 +39,7 @@
 - 템플릿 레지스트리(YAML) + 의도 분류 + top-k 매칭 + 슬롯 채움 + 안전 clamp
 - 안전/승인 게이트, audit log, kill switch(로컬 실행기 수준)
 - k6/Artillery 어댑터: 템플릿 채움 → dry-run/정적 검증 → **번들 로컬 목 서버 대상 실제 실행**
+- Docker `runner-tools`/`mock-target` 기반 L0 재현성 하니스. 클라우드 에뮬레이터는 구조 검증용이며 성능 근거로 쓰지 않음([[11-local-container-infra]])
 - 관측 수집(로컬) → 해석 → 경영/기술 리포트 (가짜/고정 메트릭 → 실제 로컬 메트릭)
 - React 웹 UI: 프롬프트 → (명확화 질문) → 계획 검토 → 승인 → 실행 → 리포트
 - 전 구간 자동 테스트(단위/통합/계약/E2E)
@@ -45,6 +47,7 @@
 ### 이번 범위에서 명시적 제외
 - `terraform apply` / `terraform destroy`, cloud resource 실제 생성
 - 클라우드 distributed runner(Grafana Cloud k6 / AWS DLT / Azure LT) **실제 실행**
+- L1(remote self-hosted local), C0(local control→cloud), C1(cloud control→cloud), X0(cross-cloud) 실제 실행
 - production·staging 등 실서비스 endpoint 대상 부하
 - payment/email/SMS/destructive endpoint, 외부 파트너 API 부하
 - chaos/fault injection 실행
@@ -69,6 +72,8 @@
 | [[08-milestones-roadmap]] | M0~M6 마일스톤 작업 분해(목표/산출물/검증/제외/위험) |
 | [[09-testing-strategy]] | 테스트 철학·계층·결정성·평가셋 (D9) |
 | [[10-open-questions-reverify]] | 남은 결정·가정, 구현 전 재검증 항목 |
+| [[11-local-container-infra]] | 로컬 컨테이너 하니스, 로컬 K8s, 클라우드 IaC 구조 사전 검증 |
+| [[12-execution-topology-matrix]] | L0/L1/C0/C1/X0 실행 토폴로지, cross-cloud 조합, ProvisionSpec 매핑 |
 
 ---
 
@@ -109,7 +114,7 @@
 1. 30개 이상 비전문가 발화 평가셋에서 **오매칭·저신뢰가 실행 경로로 새지 않음**(거부/명확화로 닫힘).
 2. 위험 요청(prod/10만 RPS/결제)은 템플릿 매칭과 무관하게 **기본 거부**된다.
 3. 승인 없이는 어떤 `ToolAction`도 실행되지 않는다 (계약·테스트로 강제).
-4. 번들 목 서버 대상으로 k6·Artillery **둘 다 실제 실행**되어 percentile/error budget 기반 리포트를 만든다.
+4. 번들 목 서버 대상으로 k6·Artillery **둘 다 실제 실행**되어 percentile/error budget 기반 리포트를 만든다. host-native와 Docker smoke가 같은 `tools/versions.json` 기준을 따른다.
 5. 모든 리포트 주장에 `evidence_refs`가 있고, `template_id`·`match_confidence`·`limitations`를 포함한다.
 6. **테스트 커버리지: 엔진·안전·어댑터·API 핵심 경로가 자동 테스트로 검증된다** (D9).
 
@@ -123,6 +128,7 @@ M1 데이터 모델 + 안전 게이트 코어(스키마·clamp·audit, 실행 0)
 M2 엔진/템플릿 매칭(의도→top-k→슬롯→clamp) + LLM 추상화 2어댑터
 M3 Template/Sandbox MVP(가짜/고정 메트릭 리포트 + Web UI 1차)
 M4 Local Runner MVP(k6/Artillery 어댑터, dry-run→목 서버 실제 실행, 실측 리포트)
-M5 (후속) Cloud MVP 설계: Terraform plan/apply 승인·ephemeral runner·teardown
-M6 (후속) 사내/클라우드 배포, 실대상 연동(승인·allowlist 선적용)
+M4.5 (선택) 실행평면 구조 리허설(L0 kind/k3d Job + L1 remote self-hosted container)
+M5 (후속) Cloud MVP 설계(C0: local control→cloud provider, Terraform plan/apply 승인·ephemeral runner·teardown)
+M6 (후속) 사내/클라우드 배포(L1/C1/X0 선택, 승인·allowlist 선적용)
 ```

@@ -25,6 +25,8 @@
 | **단위** | 정책 분류·clamp·plan_hash·슬롯 검증·매칭 결정·해석 판정·Composer 산출 | pytest / vitest | 목 주입 |
 | **계약(contract)** | API ↔ 스키마(OpenAPI) ↔ 프론트 타입, ToolAction 계약 | schemathesis / OpenAPI 검증 | 정적 |
 | **통합** | 엔진 파이프라인 end-to-end(제어 평면), 러너 ↔ 목 서버 실제 실행 | pytest + 목 LLM + 목 서버 | 시드 |
+| **Docker smoke** | host 차이를 줄인 app+mock-target+runner-tools 최소 실행 | docker compose profile | 고정 이미지/버전 매니페스트 |
+| **Topology contract** | L0/L1/C0/C1/X0 모드 판정, 승인 요구, Provider 분리 | pytest table / schema validation | 정적 + 목 provider |
 | **E2E** | 웹 전체 흐름(프롬프트→슬롯→승인→실행→리포트) | Playwright | 목 백엔드/목 서버 |
 | **평가(eval)** | 매칭 품질 회귀(발화 30+) | pytest 파라미터라이즈 | 평가셋 라벨 |
 
@@ -56,6 +58,8 @@ CI는 단위·계약·통합·E2E를 게이트로, eval은 회귀 추세(임계 
 - **엔진/매칭([[03-engine-template-matching]])**: 목 LLM 고정 출력으로 파이프라인 단위 테스트, 평가셋 회귀(정확도/거부율/명확화율 추세).
 - **안전([[04-safety-approval-audit]])**: §3 불변식 표, 정책 규칙 전수 케이스.
 - **러너([[05-runners-and-mock-target]])**: Composer 산출은 **골든 파일**(슬롯→스크립트 골격) 스냅샷, 실제 실행은 목 서버 통합, 생성기 병목 감지 단위.
+- **로컬/Docker 하니스([[05-runners-and-mock-target]])**: host-native는 빠른 개발 루프, Docker smoke는 CI 재현성 루프. 두 모드 모두 같은 목 서버 profile과 같은 `tools/versions.json`을 사용한다.
+- **실행 토폴로지([[12-execution-topology-matrix]])**: `ProvisionSpec.control_plane_location`/`runner_location`/`runner_provider`/`target_provider`/`network_path` 조합별로 L0/L1/C0/C1/X0 판정을 테스트한다. `runner_provider != target_provider`이면 cross-cloud 승인 번들이 없을 때 실행 불가여야 한다.
 - **리포트([[06-reporter-observability]])**: 고정 메트릭 → 기대 SLO 판정 골든(percentile 경계·error budget·복구시간·생성기 병목 케이스), 리포트 직렬화 스냅샷.
 - **UI/API([[07-web-ui-api]])**: 컴포넌트 테스트(목 API), 계약 테스트(OpenAPI), E2E 전체 흐름·차단·만료.
 
@@ -63,10 +67,13 @@ CI는 단위·계약·통합·E2E를 게이트로, eval은 회귀 추세(임계 
 
 ## 5. 커버리지·게이트 기준
 
-- 핵심 경로(engine·safety·runners·reporter·models)는 **분기 커버리지 우선** — 숫자 목표보다 "모든 분류/판정 분기에 케이스 존재"를 우선.
+- 핵심 경로(engine·safety·runners·reporter·models)는 **분기 커버리지 우선** — 숫자보다 "모든 분류/판정 분기에 케이스 존재"를 우선하되, CI 기본 하한은 둔다.
+- CI 하한: safety/models/reporter interpreter는 branch coverage 90% 이상, engine/runners는 80% 이상, 전체 branch coverage는 80% 이상. 임시 예외는 해당 마일스톤 문서에 사유와 만료 조건을 적어야 한다.
 - 안전 불변식(§3)은 **100% 케이스 존재**가 머지 게이트.
-- eval 정확도·거부율은 baseline 대비 하회 금지(회귀 게이트).
+- eval 절대 게이트: `false_auto_proceed=0`, unsafe prompt 차단율 100%, 필수 슬롯 추정 금지율 100%, 초기 30+ 발화 기준 template top-1 accuracy 85% 이상. 이후 baseline 대비 하회 금지(회귀 게이트).
 - 새 템플릿 추가 시: 평가셋 발화 추가 + 골든 산출 추가가 PR 체크리스트.
+- Docker smoke는 M0부터 CI 선택 게이트로 두고, M4부터 필수 게이트로 승격한다. 최소 k6 1개·Artillery 1개 시나리오가 `mock-target`에 대해 끝까지 실행되어야 한다.
+- Topology contract는 M1부터 정적 게이트로 둔다. L0 외 토폴로지가 실행 경로로 들어오면 승인·Provider 정책·cost/egress 필드가 빠진 경우 실패해야 한다.
 
 ## 6. 안티패턴(금지)
 

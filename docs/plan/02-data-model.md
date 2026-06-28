@@ -108,11 +108,14 @@ user_intent(
   request_id TEXT PRIMARY KEY,
   raw_prompt TEXT NOT NULL,
   input_mode TEXT NOT NULL CHECK(input_mode IN ('template','generative','report-only')),
-  requester_expertise TEXT,
+  requester_expertise TEXT NOT NULL DEFAULT 'nonexpert'
+    CHECK(requester_expertise IN ('nonexpert','expert')),
   template_match_ref TEXT REFERENCES template_match(match_id),
   target_service TEXT NOT NULL,
-  target_env TEXT NOT NULL,           -- Env enum (§6)
-  test_type TEXT NOT NULL,            -- TestType enum (§6)
+  target_env TEXT NOT NULL CHECK(target_env IN
+    ('local','dev','staging','pre-prod','prod-like','prod')),
+  test_type TEXT NOT NULL CHECK(test_type IN
+    ('load','stress','spike','soak','breakpoint','report-only')),
   endpoints TEXT NOT NULL,            -- JSON[]
   workload_goal TEXT NOT NULL,        -- JSON
   slo_targets TEXT NOT NULL,          -- JSON
@@ -126,10 +129,14 @@ scenario_template(                    -- YAML 미러(읽기전용)
   template_id TEXT PRIMARY KEY,
   name TEXT NOT NULL, description TEXT NOT NULL,
   example_utterances TEXT NOT NULL,   -- JSON[]
-  test_type TEXT NOT NULL, tool_family TEXT NOT NULL, target_pattern TEXT NOT NULL,
+  test_type TEXT NOT NULL CHECK(test_type IN
+    ('load','stress','spike','soak','breakpoint','report-only')),
+  tool_family TEXT NOT NULL, target_pattern TEXT NOT NULL,
   param_slots TEXT NOT NULL,          -- JSON[]
   safe_limits TEXT NOT NULL,          -- JSON
   target_whitelist TEXT, default_slo TEXT,  -- JSON
+  requires_approval_default TEXT NOT NULL CHECK(requires_approval_default IN
+    ('always','by-env','never')),
   curated_by TEXT NOT NULL, reviewed_at TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('draft','active','deprecated')),
   source_path TEXT, source_sha TEXT   -- YAML 출처/체크섬
@@ -156,8 +163,13 @@ test_plan_spec(
   match_ref TEXT REFERENCES template_match(match_id),     -- ✚ 체인 보강
   template_id TEXT REFERENCES scenario_template(template_id),
   match_confidence REAL,
-  param_slots TEXT, hypothesis TEXT NOT NULL, test_type TEXT NOT NULL,
+  param_slots TEXT, hypothesis TEXT NOT NULL,
+  test_type TEXT NOT NULL CHECK(test_type IN
+    ('load','stress','spike','soak','breakpoint','report-only')),
   workload_phases TEXT NOT NULL,      -- JSON[]
+  canary_phase TEXT NOT NULL,         -- JSON: canary VU/rate/duration, pass gates
+  generator_capacity_check TEXT NOT NULL,  -- JSON: generator health preflight/limits
+  max_blast_radius TEXT NOT NULL CHECK(max_blast_radius IN ('low','medium','high')),
   success_criteria TEXT NOT NULL, abort_thresholds TEXT NOT NULL,
   data_policy TEXT NOT NULL, observability_queries TEXT NOT NULL,
   baseline_ref TEXT REFERENCES run_record(run_id),
@@ -170,8 +182,15 @@ tool_action(
   plan_ref TEXT NOT NULL REFERENCES test_plan_spec(plan_id),   -- ✚
   template_id TEXT REFERENCES scenario_template(template_id),
   tool TEXT NOT NULL,                 -- Tool enum (§6)
+  operation TEXT NOT NULL CHECK(operation IN
+    ('plan','apply','submit','canary','run','abort','query')),
+  actor TEXT NOT NULL DEFAULT 'execution-controller'
+    CHECK(actor = 'execution-controller'),
   args TEXT NOT NULL,                 -- JSON
   requires_approval INTEGER NOT NULL, fallback_to_human INTEGER NOT NULL,
+  approval_status TEXT NOT NULL CHECK(approval_status IN
+    ('not_required','pending','approved','rejected')),
+  max_cost REAL,
   approval_id TEXT REFERENCES approval_request(approval_id),
   idempotency_key TEXT NOT NULL,
   timeout_sec INTEGER NOT NULL, dry_run INTEGER NOT NULL,
@@ -183,8 +202,11 @@ approval_request(
   approval_id TEXT PRIMARY KEY,
   plan_ref TEXT NOT NULL REFERENCES test_plan_spec(plan_id),   -- ✚
   plan_hash TEXT NOT NULL,            -- ✚ 승인 단위(§4)
+  requester TEXT NOT NULL,            -- self-approval 차단 비교 대상
   blast_radius TEXT NOT NULL CHECK(blast_radius IN ('low','medium','high')),
-  cost_estimate TEXT NOT NULL, environment TEXT NOT NULL,     -- Env enum
+  cost_estimate TEXT NOT NULL,
+  environment TEXT NOT NULL CHECK(environment IN
+    ('local','dev','staging','pre-prod','prod-like','prod')),
   risk_summary TEXT NOT NULL, expires_at TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
   decided_by TEXT, decided_at TEXT, created_at TEXT NOT NULL
@@ -231,7 +253,25 @@ knowledge_pack(pack_id TEXT PRIMARY KEY,
 
 provision_spec(provision_id TEXT PRIMARY KEY,
   topology TEXT NOT NULL CHECK(topology IN ('local','container','k8s','managed-cloud')),
-  terraform_workspace TEXT, resources TEXT NOT NULL, state_backend TEXT,
+  control_plane_location TEXT NOT NULL DEFAULT 'local-workstation' CHECK(control_plane_location IN
+    ('local-workstation','self-hosted-server','cloud-service')),
+  runner_location TEXT NOT NULL DEFAULT 'local-container' CHECK(runner_location IN
+    ('local-host','local-container','remote-container','cloud-managed','cloud-k8s-job')),
+  runner_provider TEXT NOT NULL DEFAULT 'local' CHECK(runner_provider IN
+    ('local','aws','gcp','azure','grafana-cloud','on-prem','other')),
+  target_provider TEXT NOT NULL DEFAULT 'local' CHECK(target_provider IN
+    ('local','aws','gcp','azure','firebase','on-prem','other')),
+  network_path TEXT NOT NULL DEFAULT 'same-host' CHECK(network_path IN
+    ('same-host','same-vpc','public-internet','private-link','cross-cloud-public','cross-cloud-private')),
+  iac_tool TEXT NOT NULL DEFAULT 'managed' CHECK(iac_tool IN
+    ('terraform','opentofu','pulumi','cdk','k8s','managed')),
+  region TEXT,
+  identity TEXT NOT NULL,             -- JSON {mode: oidc|managed-identity|static|none, scope}
+  terraform_workspace TEXT, resources TEXT NOT NULL,
+  plan_artifact_hash TEXT,            -- 승인 결속용, saved plan/hash
+  teardown_strategy TEXT NOT NULL DEFAULT 'ttl-sweeper'
+    CHECK(teardown_strategy IN ('destroy-plan','ttl-sweeper','hold-for-debug')),
+  state_backend TEXT,                 -- JSON {type, encrypted, locking}
   ttl_minutes INTEGER NOT NULL, cost_estimate TEXT NOT NULL, destroy_plan_required INTEGER NOT NULL);
 ```
 
@@ -250,13 +290,15 @@ plan_hash = "sha256:v1:" + SHA256(
   canonical_json({
     "plan":   normalize(TestPlanSpec_core),   # 의미 필드만
     "actions": [ normalize(ToolAction_core) for a in actions ordered ],
-    "limits": normalize(safe_limits)          # clamp 후 최종 상한
+    "limits": normalize(safe_limits),         # clamp 후 최종 상한
+    "provision": normalize(ProvisionSpec_core)
   })
 )
 ```
 
 - **TestPlanSpec_core**: `test_type`, `hypothesis`, `param_slots`, `workload_phases`, `success_criteria`, `abort_thresholds`, `data_policy`, `template_id`, 대상(`target_service`/`target_env`/`endpoints`). 제외: 서버 발급 `plan_id`, `match_confidence`, 타임스탬프.
-- **ToolAction_core**: `tool`, `args`, `timeout_sec`, `dry_run`, `requires_approval`. 제외: `action_id`, `approval_id`, `idempotency_key`(아래 순환 회피).
+- **ToolAction_core**: `tool`, `operation`, `args`, `timeout_sec`, `dry_run`, `requires_approval`, `max_cost`. 제외: `action_id`, `approval_id`, `approval_status`, `idempotency_key`(아래 순환 회피).
+- **ProvisionSpec_core**: `topology`, `control_plane_location`, `runner_location`, `runner_provider`, `target_provider`, `network_path`, `iac_tool`, `region`, `identity.mode`, `teardown_strategy`. 대상 Provider와 러너 Provider가 달라지는 cross-cloud 실행은 이 필드들이 승인 번들에 반드시 포함된다([[12-execution-topology-matrix]]).
 - **safe_limits**: clamp([[04-safety-approval-audit]]) 적용 후 `max_rps`/`max_vu`/`max_duration`/`max_cost`/`allowed_envs`.
 
 **정규화(normalize) 규칙** — 같은 의미면 같은 해시:
@@ -317,18 +359,29 @@ audit_log(
 | `MatchMethod` | `embedding-cosine` / `llm-classifier` / `hybrid` / `keyword` | TemplateMatch | **정정 통일**(문서 내 불일치 해소) |
 | `MatchDecision` | `auto-proceed` / `clarify` / `reject` / `route-to-expert` | TemplateMatch | τ 기반 분기([[01-architecture]] §3) |
 | `InputMode` | `template` / `generative` / `report-only` | UserIntent | 비전문가 기본 `template` |
+| `RequesterExpertise` | `nonexpert` / `expert` | UserIntent.requester_expertise | 기본 `nonexpert`; `expert`만 저신뢰 자유생성/큐레이션 경로 가능 |
 | `TestType` | `load` / `stress` / `spike` / `soak` / `breakpoint` / `report-only` | UserIntent·ScenarioTemplate·TestPlanSpec | **통일**: 원안의 `chaos-adjacent`는 로컬 범위 제외([[00-overview]] §3)→ 인식 라벨이지만 실행 불가, `reject`/`route-to-expert`로 라우팅. `report-only`는 전 스키마 공통 |
 | `Env` | `local` / `dev` / `staging` / `pre-prod` / `prod-like` / `prod` | UserIntent.target_env · ApprovalRequest.environment | 동일 enum 공유 |
 | `ToolFamily` | `k6` / `artillery` / `locust` / `jmeter` / `gatling` / `managed` / `report-only` | ScenarioTemplate | 카탈로그 폭 |
 | `Tool` | `k6` / `artillery` / `mock` (로컬 활성) ⊂ ToolFamily allowlist | ToolAction | 로컬 실행은 k6/artillery만([[00-overview]] D6/D7) |
+| `ToolOperation` | `plan` / `apply` / `submit` / `canary` / `run` / `abort` / `query` | ToolAction.operation | 실행 단계 분기. 로컬 M4는 `submit`/`canary`/`run`/`abort`/`query` 중심 |
+| `ToolApprovalStatus` | `not_required` / `pending` / `approved` / `rejected` | ToolAction.approval_status | ApprovalRequest와 별개로 action별 실행 가능 상태를 고정 |
 | `TargetPattern` | `REST` / `WebSocket` / `gRPC` / `browser` / `BaaS-mixed` | ScenarioTemplate | |
 | `TemplateStatus` | `draft` / `active` / `deprecated` | ScenarioTemplate | |
+| `RequiresApprovalDefault` | `always` / `by-env` / `never` | ScenarioTemplate.requires_approval_default | 템플릿 기본 승인 정책. 실제 실행 전 [[04-safety-approval-audit]]가 env·risk로 최종 판정 |
 | `ApprovalStatus` | `pending` / `approved` / `rejected` / `expired` | ApprovalRequest | |
 | `RunStatus` | `queued` / `canary` / `running` / `aborting` / `aborted` / `completed` / `failed` | RunRecord | 생명주기 단일화(연구 초안 5값을 canary·aborted 포함 7값으로 확장). UI 표시는 대문자이나 영속값은 소문자([[07-web-ui-api]] §5.4) |
 | `Outcome` | `pass` / `fail` / `inconclusive` / `aborted` | InterpretationSpec | |
 | `BlastRadius` | `low` / `medium` / `high` | ApprovalRequest | |
 | `FreshnessRisk` | `low` / `medium` / `high` | KnowledgePack | |
 | `Topology` | `local` / `container` / `k8s` / `managed-cloud` | ProvisionSpec | 로컬은 `local` |
+| `ControlPlaneLocation` | `local-workstation` / `self-hosted-server` / `cloud-service` | ProvisionSpec.control_plane_location | 계획·승인·audit 앱의 위치. [[12-execution-topology-matrix]] L0/L1/C0/C1/X0 판정 축 |
+| `RunnerLocation` | `local-host` / `local-container` / `remote-container` / `cloud-managed` / `cloud-k8s-job` | ProvisionSpec.runner_location | 부하 생성기가 실제로 도는 substrate |
+| `ProviderRef` | runner: `local` / `aws` / `gcp` / `azure` / `grafana-cloud` / `on-prem` / `other`; target: `local` / `aws` / `gcp` / `azure` / `firebase` / `on-prem` / `other` | ProvisionSpec.runner_provider / target_provider | 러너 Provider와 대상 Provider를 분리. AWS 대상 + GCP 러너 같은 cross-cloud를 표현 |
+| `NetworkPath` | `same-host` / `same-vpc` / `public-internet` / `private-link` / `cross-cloud-public` / `cross-cloud-private` | ProvisionSpec.network_path | egress 비용·allowlist·보안 정책 판단 |
+| `IaCTool` | `terraform` / `opentofu` / `pulumi` / `cdk` / `k8s` / `managed` | ProvisionSpec.iac_tool | 로컬/관리형은 `managed`, M5+에서 실제 IaC 선택 |
+| `IdentityMode` | `oidc` / `managed-identity` / `static` / `none` | ProvisionSpec.identity.mode | 로컬은 `none`; 클라우드는 OIDC/관리형 ID 우선, 장기 static은 예외 |
+| `TeardownStrategy` | `destroy-plan` / `ttl-sweeper` / `hold-for-debug` | ProvisionSpec.teardown_strategy | 기본 `ttl-sweeper`; 클라우드 apply 전 destroy/TTL 경로 명시 |
 
 ---
 
@@ -387,4 +440,4 @@ D9(테스트 가능성 1급 원칙)에 따라 데이터 계층은 in-memory SQLi
 
 ## 부록: 본 문서가 도입한 체인 보강 컬럼(✚) 요약
 
-`docs/research/03` §7·§9.5 스키마에 없으나 추적 체인·승인 단위를 닫기 위해 영속 계층에서 추가: `TestPlanSpec.match_ref`, `ToolAction.plan_ref`, `ApprovalRequest.plan_ref`·**`plan_hash`**, `RunRecord.approval_ref`, `InterpretationSpec.observation_ref`, `FinalReport.interpretation_ref`·`run_ref`. 도메인 의미 변경 없이 링크만 보강한다.
+`docs/research/03` §7·§9.5 스키마에 없으나 추적 체인·승인 단위를 닫기 위해 영속 계층에서 추가: `TestPlanSpec.match_ref`·`canary_phase`·`generator_capacity_check`·`max_blast_radius`, `ToolAction.plan_ref`·`operation`·`actor`·`approval_status`·`max_cost`, `ApprovalRequest.plan_ref`·**`plan_hash`**·`requester`, `RunRecord.approval_ref`, `InterpretationSpec.observation_ref`, `FinalReport.interpretation_ref`·`run_ref`, `ProvisionSpec.control_plane_location`·`runner_location`·`runner_provider`·`target_provider`·`network_path`·`iac_tool`·`region`·`identity`·`plan_artifact_hash`·`teardown_strategy`·`state_backend`. 도메인 의미 변경 없이 승인·실행·클라우드 확장 계약을 보강한다.

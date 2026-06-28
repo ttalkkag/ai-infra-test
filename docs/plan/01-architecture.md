@@ -60,7 +60,7 @@
    └─ < τ_low           → 실행 거부(자유생성 폴백 금지; 전문가+승인 경로만)
 4. 슬롯 채움            structured output(typed), 필수 슬롯 누락 → 질문
 5. 안전 clamp/검증      safe_limits·target_whitelist·env allowlist 적용
-6. 계획 번들 생성        UserIntent+TemplateMatch+TestPlanSpec+ToolAction(draft)+ApprovalRequest, plan_hash 계산
+6. 계획 번들 생성        UserIntent+TemplateMatch+TestPlanSpec+ProvisionSpec(토폴로지)+ToolAction(draft)+ApprovalRequest, plan_hash 계산
 7. POST /approve       인간 승인(approval_id + plan_hash 결합) — 거부 시 사유 audit
 8. 실행                 Execution Controller → canary → (통과) full run (로컬 목 서버)
 9. 관측                 Observation Collector(read-only) → ObservationBundle
@@ -69,6 +69,18 @@
 ```
 
 위험 요청(prod/고부하/결제 등)은 3~5 어느 단계에서든 **기본 금지**로 단락(short-circuit)된다 ([[04-safety-approval-audit]] §결정 흐름).
+
+### 3.1 IaCPlanner 계약 (M5+ 인터페이스만)
+
+`engine/iac_planner.py`는 클라우드 단계에서 필요한 계획 산출물을 만들지만, 제어 평면에 있으므로 **apply/destroy 실행 권한은 없다**. 로컬 범위에서는 아래 계약만 보존한다. 실행 위치·Provider 조합은 `ProvisionSpec.control_plane_location`/`runner_location`/`runner_provider`/`target_provider`/`network_path`로 표현하며, L0/L1/C0/C1/X0 판정은 [[12-execution-topology-matrix]]를 따른다.
+
+| 항목 | 계약 |
+|---|---|
+| 입력 | `ProvisionSpec`, `KnowledgePack` |
+| 메서드 | `fmt_validate()`, `plan() -> PlanBundle`, `show_json()`, `make_destroy_plan()` |
+| `PlanBundle` | `{plan_artifact_path, plan_json, plan_hash, resources[], cost_estimate, destroy_plan_path}` |
+| 승인 결속 | `plan_hash`를 `ApprovalRequest.plan_hash`와 결합하고, `ToolAction.operation=apply`는 승인 후 Execution Controller만 수행 |
+| 보관 | saved plan/show-json은 민감 아티팩트로 간주해 짧게 보관하고 접근을 제한 |
 
 ---
 
@@ -115,6 +127,10 @@ repo/  (docs/ 와 별개의 신규 앱 루트 — 위치는 M0에서 확정)
     baseline_compare_report.yaml
     _schema.md           # 템플릿 스키마 설명
   mock-target/           # 번들 로컬 목 서버(지연·에러율·동접 주입)
+  tools/
+    versions.json        # k6/Artillery 등 로컬 러너 버전 매니페스트
+  docker/
+    compose.local.yml    # app/mock-target/runner-tools 재현성 하니스(M0 초안, M4 필수)
   eval/                  # 매칭 평가셋(발화 30+)·기대 라벨
   docs/                  # 운영/개발 README (리서치 docs와 구분)
 ```

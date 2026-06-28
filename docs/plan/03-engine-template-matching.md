@@ -123,6 +123,8 @@ class Matcher:
 **권장: hybrid (1차 LLM 분류기 + 임베딩 보조).**
 - 소형 목록에서는 LLM 분류기를 **1차 결정자**로 둔다(유한 enum 선택 + 근거 텍스트). 동시에 임베딩 cosine을 **보조 신호**로 계산해, 둘이 일치하면 신뢰도를 상향, 불일치하면 `clarify`로 강등(교차검증 게이트, `docs/research/03` §9.3).
 - 임베딩은 사전계산·캐시되어 거의 무료이므로 보조 신호로 항상 켜둔다. cosine은 `match_confidence`의 수치 백본으로도 쓴다(LLM 자기보고 신뢰도보다 보정 가능, §8).
+- 초기 `combine()` 산식은 보수적으로 고정한다. `agree=true`이면 `min(1.0, 0.55*emb_score + 0.35*llm_conf + 0.10)`, `agree=false`이면 `min(0.49, 0.70*emb_score + 0.30*llm_conf)`로 강등해 자동 진행을 막는다. 가중치는 M2 eval에서 보정하되, **불일치가 자동 실행으로 이어지지 않는 불변식**은 유지한다.
+- 임베딩 인덱스는 초기에는 `templates/index.json`(template metadata) + `templates/embeddings.npy`(정규화 벡터)로 충분하다. 템플릿 수가 늘거나 순수 임베딩 모드가 필요해질 때만 `sqlite-vec` 등 벡터스토어를 M2 후속 작업으로 도입한다.
 
 ```python
 def match(self, intent, intent_conf):
@@ -146,7 +148,7 @@ def match(self, intent, intent_conf):
 
 ## 3. 임계값 τ_low/τ_high와 decision 처리
 
-`MatchConfig.tau_low`, `tau_high`는 설정(`config.py`)에서 주입하고 §8에서 오프라인 보정한다. `rank_and_decide`가 `match_confidence`와 **단일 후보 우세(top1 − top2 margin ≥ `margin_min`)**를 함께 본다. 점수만 높고 1·2위가 근소하면 모호로 간주한다.
+`MatchConfig.tau_low`, `tau_high`는 설정(`config.py`)에서 주입하고 §8에서 오프라인 보정한다. M2 초기값은 **`tau_low=0.55`, `tau_high=0.80`, `margin_min=0.08`**로 둔다. `rank_and_decide`가 `match_confidence`와 **단일 후보 우세(top1 − top2 margin ≥ `margin_min`)**를 함께 본다. 점수만 높고 1·2위가 근소하면 모호로 간주한다.
 
 | 조건 | decision | 처리 | 연결 |
 |---|---|---|---|
