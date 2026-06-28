@@ -39,6 +39,7 @@
 - **비전문가 기본 모드 = 자연어 → 템플릿 매칭(§2.5).** 자유 스크립트 생성은 출력 공간이 무한이라 환각·위험 endpoint 위험이 크지만, 사전 검증된 **유한 템플릿**에서 선택+슬롯 채움하면 위험 판단이 큐레이션 시점으로 이동한다. 남는 위험은 "오매칭"뿐이며 **저신뢰(유사도 임계 미만) 시 실행 거부+사람 확인**으로 닫는다. 자유 생성은 전문가+승인 경로에만 허용.
 - **대상은 범용(AWS/GCP/Azure/Firebase). 단 BaaS는 별도 주의.** Firebase 등 BaaS는 종량 과금이라 **예산 알림이 사용을 cap하지 않음**(비용 폭증) + 같은 프로젝트/조직의 다른 타이틀·실유저에 영향 → **테스트 전용 프로젝트 격리 + 쿼터/예산 cap**이 1순위. 또 Firestore 실시간(gRPC/WebChannel)·RTDB(WebSocket)는 일반 HTTP 부하도구로 재현 불가 → k6 `websockets`/`grpc`/`browser`·Artillery `ws`/`socketio`/`playwright` 필요.
 - **첫 MVP 순서는 Research Prototype → Template/Sandbox MVP → Local Runner MVP → Cloud MVP.** 곧바로 cloud runner + apply를 붙이면 비용·권한·데이터 오염·prod 안전 리스크가 먼저 커진다. 게임사 맥락에선 **공통 시나리오(로그인→컨텐츠→종료) 템플릿 라이브러리 + 타이틀별 파라미터 슬롯**으로 20+ 타이틀 재사용이 핵심.
+- **로컬/클라우드는 단일 플래그가 아니다.** 계획서 12는 L0(local workstation/container), L1(remote self-hosted container), C0(local control→cloud provider), C1(cloud control→cloud provider), X0(cross-cloud)를 분리한다. 예를 들어 AWS 서비스 서버를 GCP/Grafana Cloud 러너로 테스트하는 조합은 X0이며, 양쪽 Provider 정책·egress·source IP/load zone·관측 지연을 승인 번들에 포함해야 한다.
 
 ---
 
@@ -245,6 +246,7 @@ stateDiagram-v2
 | 엔터프라이즈 AI 통합 | Gatling / BlazeMeter | MCP/REST 있으나 상용 제약↑. Gatling MCP는 read-only(deploy/start는 별도 Skills) |
 | **Firebase/BaaS 대상** | **k6**(websockets/grpc/browser) 또는 Artillery(ws/socketio/playwright) | Firestore 실시간=gRPC/WebChannel, RTDB=WebSocket → **일반 HTTP 부하도구로 재현 불가**. App Check가 토큰 없는 부하 차단, 보안규칙 `get()/exists()`는 거부돼도 과금 |
 | **게임 실시간(WS/gRPC)** | k6 ws/grpc, Gatling ws/sse | 부하 단위가 RPS가 아니라 **지속 연결 수(CCU)**. Locust는 HTTP만 내장 |
+| **Cross-cloud 실행** | Grafana Cloud k6 load zone / GCP·AWS·Azure self-managed runner | target Provider와 runner Provider를 분리한다. 정책·egress·allowlist·관측 지연을 별도 승인 조건으로 둔다 |
 
 **검증으로 정정된 이전 오류 3건:** ① k6 Terraform 리소스명은 추정이 아니라 6종 실재(`grafana_k6_load_test` 등) ② Azure는 Playwright **부하** 미지원 ③ Gatling MCP는 read-only. (도구 문서 §7~§8에 Firebase/실시간 상세)
 
@@ -275,8 +277,8 @@ stateDiagram-v2
 flowchart LR
     P1["1. Research Prototype<br/>문서검증 · tool matrix · schema<br/>fake execution (실행 0)"]
     P2["2. Template/Sandbox MVP<br/>자연어→템플릿 top-k · 슬롯 질문<br/>fake/frozen metrics → report"]
-    P3["3. Local Runner MVP<br/>k6/Artillery template fill · dry_run=true<br/>lint/static validation"]
-    P4["4. Cloud MVP<br/>plan/apply 승인 · ephemeral runner<br/>canary→full · teardown/TTL"]
+    P3["3. Local Runner MVP<br/>k6/Artillery template fill<br/>mock-target actual run · Docker smoke"]
+    P4["4. Cloud MVP<br/>L1/C0/C1/X0 topology 선택<br/>plan/apply 승인 · canary→full · teardown/TTL"]
     P1 --> P2 --> P3 --> P4
 ```
 
@@ -284,8 +286,8 @@ flowchart LR
 |---|---|---|---|
 | 1 Research Prototype | 문서·도구·스키마·게이트 검증 + **시나리오 템플릿 라이브러리 초안**(로그인→컨텐츠→종료 골격 + 슬롯) | apply, cloud runner, 실제 부하 | 출처 URL+fetched_at, 3분류 분리, prod 기본 거부, 템플릿 안전한계 내장 |
 | 2 Template/Sandbox MVP | **자연어→템플릿 매칭** + 슬롯 질문·가짜 리포트 | cloud 자격증명, 실제 endpoint 부하, Terraform apply | top-k/임계값, 저신뢰 매칭 거부, `template_id`/`match_confidence` audit |
-| 3 Local Runner MVP | k6/Artillery 템플릿 채움·dry-run·정적 검증 | cloud 자격증명, 분산실행, staging+ 대상 | lint/static만, `dry_run=true`, 모든 결론에 evidence_refs |
-| 4 Cloud MVP | plan/apply 승인·ephemeral·canary·teardown (**테스트 전용 프로젝트 격리**) | prod 대상, chaos, payment/email/SMS | plan hash↔approval id, cost/quota cap, canary 없이는 full run 불가, TTL/destroy 회수 확인 |
+| 3 Local Runner MVP | k6/Artillery 템플릿 채움·dry-run·정적 검증·**번들 목 타깃 실제 실행**·Docker smoke | cloud 자격증명, 분산실행, staging+ 대상 | `mock-target` 대상 실측, threshold exit, generator 병목 분리, 모든 결론에 evidence_refs |
+| 4 Cloud MVP | L1/C0/C1/X0 중 후속 토폴로지 선택, plan/apply 승인·ephemeral·canary·teardown(**테스트 전용 프로젝트 격리**) | prod 대상, chaos, payment/email/SMS | plan hash↔approval id, cost/quota cap, canary 없이는 full run 불가, TTL/destroy 회수 확인, cross-cloud는 양 Provider 정책·egress 검토 |
 
 ---
 
