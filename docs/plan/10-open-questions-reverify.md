@@ -55,7 +55,7 @@
 3. **후속 배포 토폴로지**: L1(remote self-hosted local), C0(local control→cloud), C1(cloud control→cloud), X0(cross-cloud) 중 어떤 모델을 먼저 제품화할지. AWS 대상+GCP/Grafana Cloud 러너처럼 Provider가 갈라지는 경우 별도 승인 체계 필요.
 4. **인증/멀티테넌시**: 사내 배포(M6) 시 SSO·역할(기획/QE/SRE)·승인자 지정 방식.
 5. **관측 백엔드**: 로컬은 k6 summary로 충분, 클라우드는 Grafana/Prometheus 연동 범위.
-6. **템플릿 큐레이션 운영**: 누가 draft→active를 승인하는지, 리뷰 SLA.
+6. **템플릿 큐레이션 운영**: 누가 draft→reviewed→active를 승인하는지, 리뷰 SLA.
 7. **실시간(WS/gRPC) 부하 재현 깊이**: Firebase 실시간 경로를 와이어 수준 재현 vs 브라우저 SDK 소수 VU 검증(PoC 필요, [[03-engine-template-matching]] firebase_realtime_sync_probe).
 8. **리포트 export 포맷**: 웹 뷰 외 PDF/markdown 중 우선순위.
 

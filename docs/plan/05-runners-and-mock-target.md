@@ -200,7 +200,7 @@ export function handleSummary(data) {
 
 ### 3.5 dry-run / 정적 검증 경로
 
-- `dry_run`: 산출물 정적 파싱 + 슬롯 바인딩 점검(네트워크 0). k6 자체 정적 검증은 한정적이므로, **목 서버 대상 canary(짧은 1~5초)**를 사실상의 무해 dry-run으로 함께 둔다.
+- `dry_run`: 산출물 정적 파싱 + 슬롯 바인딩 점검(네트워크 0). k6 자체 정적 검증은 한정적이어도 canary로 보완하지 않는다. **목 서버 대상 canary(짧은 1~5초)**는 승인된 `ToolAction.dry_run=false`에서 `submit` 이후에만 실행한다.
 - MCP `validate_script`/`run_script`(VU≤50·≤5분 제한, preview)는 **선택적 보조**일 뿐, 실행 권한 경로가 아니다 — 신뢰 경로는 어디까지나 controller→어댑터 (docs/research/01 정정 2).
 
 ---

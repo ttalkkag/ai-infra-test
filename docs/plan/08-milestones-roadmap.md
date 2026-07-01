@@ -49,7 +49,7 @@ M0 부트스트랩 ─ M1 데이터·안전 코어 ─ M2 엔진/매칭 ─ M3 S
 - **산출물** ([[03-engine-template-matching]]):
   - `engine/orchestrator.py`·`matcher.py`·`strategy.py`
   - `llm/base.py` + `hosted.py` + `local.py` + `registry.py` (둘 다 초기 지원, 목 어댑터)
-  - `templates/` 5종 YAML + 레지스트리 로더, 큐레이션 상태(draft→active)
+  - `templates/` 5종 YAML + 레지스트리 로더, 큐레이션 상태(draft→reviewed→active)
   - `eval/` 발화 30+ 평가셋, τ_low/τ_high 오프라인 보정 노트
 - **검증**:
   - 평가셋에서 오매칭·저신뢰가 실행 경로로 새지 않음(거부/명확화로 닫힘)

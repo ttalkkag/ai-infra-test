@@ -18,9 +18,9 @@
 | 5 | **TestPlanSpec** | 영속 | `plan_id` | `match_ref → TemplateMatch.match_id`✚, `template_id → ScenarioTemplate.template_id`, `baseline_ref → RunRecord.run_id`(nullable) | `match_ref`는 체인 보강 컬럼(§2·assumptions) |
 | 6 | **ProvisionSpec** | 영속(로컬은 거의 미사용, `topology=local`) | `provision_id` | — | 클라우드 단계 대비 인터페이스 보존([[00-overview]] D11) |
 | 7 | **ToolAction** | 영속(번들 생성 시 고정; 그 전 draft는 in-memory) | `action_id` | `plan_ref → TestPlanSpec.plan_id`✚, `approval_id → ApprovalRequest.approval_id`(nullable), `template_id → ScenarioTemplate.template_id` | `args` JSON. `idempotency_key`는 §8 정책 |
-| 8 | **ApprovalRequest** | 영속(tamper-proof) | `approval_id` | `plan_ref → TestPlanSpec.plan_id`✚ | **`plan_hash` 컬럼 보유**✚(§4). `requested_actions`=ToolAction 1:N |
+| 8 | **ApprovalRequest** | 영속(현재 상태 row + 감사 결속) | `approval_id` | `plan_ref → TestPlanSpec.plan_id`✚ | **`plan_hash` 컬럼 보유**✚(§4). `requested_actions`=ToolAction 1:N |
 | 9 | **RunRecord** | 영속 | `run_id` | `plan_id → TestPlanSpec.plan_id`, `approval_ref → ApprovalRequest.approval_id`✚, `template_id`, `provision_id`(nullable) | `artifacts` JSON(참조만) |
-| 10 | **ObservationBundle** | 영속 | `observation_id` | `run_id → RunRecord.run_id` | `metrics`/`logs`/`traces`/`costs` JSON 또는 artifact 참조 |
+| 10 | **ObservationBundle** | 영속 | `observation_id` | `run_id → RunRecord.run_id` | `source` + `metrics`/`logs`/`traces`/`costs` JSON 또는 artifact 참조 |
 | 11 | **InterpretationSpec** | 영속 | `interpretation_id` | `run_id → RunRecord.run_id`, `observation_ref → ObservationBundle.observation_id`✚ | `findings`/`evidence_refs` JSON |
 | 12 | **FinalReport** | 영속 | `report_id` | `interpretation_ref → InterpretationSpec.interpretation_id`✚, `run_ref → RunRecord.run_id`✚, `template_id` | 모든 주장에 `evidence_refs`([[00-overview]] §7-5) |
 | + | **AuditLog** | 영속, **append-only** (12 스키마 외) | `audit_id`(+ `seq`) | 전 스테이지 약결합 참조 | §5 |
@@ -138,7 +138,7 @@ scenario_template(                    -- YAML 미러(읽기전용)
   requires_approval_default TEXT NOT NULL CHECK(requires_approval_default IN
     ('always','by-env','never')),
   curated_by TEXT NOT NULL, reviewed_at TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('draft','active','deprecated')),
+  status TEXT NOT NULL CHECK(status IN ('draft','reviewed','active','deprecated')),
   source_path TEXT, source_sha TEXT   -- YAML 출처/체크섬
 );
 
@@ -227,6 +227,7 @@ run_record(
 
 observation_bundle(observation_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES run_record(run_id),
+  source TEXT NOT NULL CHECK(source IN ('frozen','measured','measured-remote')),
   metrics TEXT NOT NULL, logs TEXT NOT NULL, traces TEXT, costs TEXT NOT NULL, anomalies TEXT);
 -- INDEX(run_id)
 
@@ -314,6 +315,8 @@ plan_hash = "sha256:v1:" + SHA256(
 
 `docs/research/05-safety-governance.md` §11 audit 필드 요구사항을 단일 테이블로 구현한다. **insert-only**: store 계층에 update/delete 메서드를 두지 않고, 선택적으로 tamper-evident 해시 체인을 둔다.
 
+도메인 테이블(`ApprovalRequest.status/decided_by/decided_at`, `RunRecord.status/abort_reason`, `FinalReport` 생성 등)은 **현재 상태 row**로 제한적 갱신을 허용한다. 단, 모든 상태 전이는 같은 트랜잭션에서 `AuditLog` 이벤트를 append해야 한다. `UPDATE`/`DELETE` 금지는 `audit_log`에 적용하며, M1은 도메인 상태를 event-sourcing으로 구현하지 않는다.
+
 ```sql
 audit_log(
   audit_id TEXT PRIMARY KEY,          -- ULID/UUID
@@ -367,7 +370,8 @@ audit_log(
 | `ToolOperation` | `plan` / `apply` / `submit` / `canary` / `run` / `abort` / `query` | ToolAction.operation | 실행 단계 분기. 로컬 M4는 `submit`/`canary`/`run`/`abort`/`query` 중심 |
 | `ToolApprovalStatus` | `not_required` / `pending` / `approved` / `rejected` | ToolAction.approval_status | ApprovalRequest와 별개로 action별 실행 가능 상태를 고정 |
 | `TargetPattern` | `REST` / `WebSocket` / `gRPC` / `browser` / `BaaS-mixed` | ScenarioTemplate | |
-| `TemplateStatus` | `draft` / `active` / `deprecated` | ScenarioTemplate | |
+| `TemplateStatus` | `draft` / `reviewed` / `active` / `deprecated` | ScenarioTemplate | `reviewed`는 engineer review 통과 후 policy review 전 상태. 검색 인덱스에는 `active`만 포함 |
+| `ObservationSource` | `frozen` / `measured` / `measured-remote` | ObservationBundle.source / ReportResponse.data_source | M3 fixture는 `frozen`, M4 목 서버 실측은 `measured`, cloud 후속은 `measured-remote` |
 | `RequiresApprovalDefault` | `always` / `by-env` / `never` | ScenarioTemplate.requires_approval_default | 템플릿 기본 승인 정책. 실제 실행 전 [[04-safety-approval-audit]]가 env·risk로 최종 판정 |
 | `ApprovalStatus` | `pending` / `approved` / `rejected` / `expired` | ApprovalRequest | |
 | `RunStatus` | `queued` / `canary` / `running` / `aborting` / `aborted` / `completed` / `failed` | RunRecord | 생명주기 단일화(연구 초안 5값을 canary·aborted 포함 7값으로 확장). UI 표시는 대문자이나 영속값은 소문자([[07-web-ui-api]] §5.4) |

@@ -305,7 +305,7 @@ safe_limits:                   # 검증된 안전 한계(비전문가 우회 불
 target_whitelist: []           # 허용 타이틀(비면 env allowlist만 적용)
 default_slo: {p95_ms: 300, p99_ms: 800, error_rate: 0.01}
 requires_approval_default: by-env   # always/by-env/never (prod=always)
-status: active                 # draft/active/deprecated
+status: active                 # draft/reviewed/active/deprecated
 curated_by: "<engineer>"
 reviewed_at: "2026-06-26T00:00:00Z"
 ```

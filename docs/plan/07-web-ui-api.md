@@ -42,7 +42,7 @@
 | `POST /run` | `RunRequest{ approval_id, plan_hash }` | `RunResponse{ run_id, RunRecord(state=Queued) }` | operator | **실행** | **유일 실행 트리거**. 승인된 `ToolAction[]`만 실행. `Idempotency-Key` 헤더 필수(중복 실행 차단) |
 | `GET /runs/{run_id}` | — | `RunRecord` | viewer | 읽기 | WS 단절 시 폴링 폴백·현재 상태 조회 |
 | `WS /run/{run_id}/stream` | (§2.2) | (§2.2) | operator(kill)/viewer(구독) | **실행** | 실시간 진행률·canary 판정·kill. `?from_seq=N` 재연결 |
-| `GET /report/{run_id}` | — | `FinalReport{ executive_summary, technical_summary, slo_results[], risk_assessment, recommendations[], artifacts[], limitations[], template_id, match_confidence }` | viewer | 읽기 | 실행 미완료 시 404/425(too early). 필드명은 [[02-data-model]]·[[06-reporter-observability]] 정본을 따른다 |
+| `GET /report/{run_id}` | — | `ReportResponse{ data_source, report: FinalReport{ executive_summary, technical_summary, slo_results[], risk_assessment, recommendations[], artifacts[], limitations[], template_id, match_confidence } }` | viewer | 읽기 | 실행 미완료 시 404/425(too early). `data_source`는 `ObservationBundle.source`에서 온다([[02-data-model]]·[[06-reporter-observability]]) |
 | `GET /templates` | `?q=&intent=` | `TemplateListResponse{ items: ScenarioTemplate[] }` | viewer | 읽기 | 카탈로그. safe_limits·target_whitelist 노출(읽기) |
 | `GET /runs` | `?baseline=<run_id>&limit=&intent=` | `RunListResponse{ items: RunRecord[], baseline?: RunRecord, delta?{} }` | viewer | 읽기 | `baseline` 지정 시 p95/error_rate 등 delta 동봉([[06-reporter-observability]]) |
 
@@ -166,7 +166,7 @@ ApiError { code: string, message: string, detail?: object, retriable: bool }
 │   network_path: same-host                                    │
 │                                                              │
 │  ToolAction (실행될 작업)            도구: k6                 │
-│   ▸ dry-run 정적 검증  →  canary(5% · 30s)  →  full run       │
+│   ▸ dry-run 정적 검증  →  승인 후 canary(5% · 30s) → full run │
 │   ※ 자유 명령이 아닌 정해진 작업만 실행됩니다(typed).         │
 │                                                              │
 │  안전 판정 (safety_judgement)                                │
@@ -236,7 +236,7 @@ ApiError { code: string, message: string, detail?: object, retriable: bool }
 │  [ baseline과 비교 ]   [ 내보내기 (JSON / PDF) ]            │
 └────────────────────────────────────────────────────────────┘
 ```
-`GET /report/{run_id}`. 모든 주장에 `evidence_refs` 링크. `data_source`(=`ObservationBundle.source`, [[06-reporter-observability]])는 **`frozen(고정)`** 또는 **`measured(실측)`** 배지로 항상 표시(§7).
+`GET /report/{run_id}`. 모든 주장에 `evidence_refs` 링크. `data_source`(=`ObservationBundle.source`, [[06-reporter-observability]])는 M3/M4에서 **`frozen(고정)`** 또는 **`measured(실측)`** 배지로 항상 표시(§7). 후속 cloud는 `measured-remote`.
 
 ### 공통 — 차단/거부 카드 (위험·저신뢰)
 
