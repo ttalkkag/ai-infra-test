@@ -20,7 +20,7 @@
 | 7 | **ToolAction** | 영속(번들 생성 시 고정; 그 전 draft는 in-memory) | `action_id` | `plan_ref → TestPlanSpec.plan_id`✚, `approval_id → ApprovalRequest.approval_id`(nullable), `template_id → ScenarioTemplate.template_id` | `args` JSON. `idempotency_key`는 §8 정책 |
 | 8 | **ApprovalRequest** | 영속(현재 상태 row + 감사 결속) | `approval_id` | `plan_ref → TestPlanSpec.plan_id`✚ | **`plan_hash` 컬럼 보유**✚(§4). `requested_actions`=ToolAction 1:N |
 | 9 | **RunRecord** | 영속 | `run_id` | `plan_id → TestPlanSpec.plan_id`, `approval_ref → ApprovalRequest.approval_id`✚, `template_id`, `provision_id`(nullable) | `artifacts` JSON(참조만) |
-| 10 | **ObservationBundle** | 영속 | `observation_id` | `run_id → RunRecord.run_id` | `source` + `metrics`/`logs`/`traces`/`costs` JSON 또는 artifact 참조 |
+| 10 | **ObservationBundle** | 영속 | `observation_id` | `run_id → RunRecord.run_id` | `source` + `collected_as_of` + `metrics`/`logs`/`traces`/`costs` JSON 또는 artifact 참조 |
 | 11 | **InterpretationSpec** | 영속 | `interpretation_id` | `run_id → RunRecord.run_id`, `observation_ref → ObservationBundle.observation_id`✚ | `findings`/`evidence_refs` JSON |
 | 12 | **FinalReport** | 영속 | `report_id` | `interpretation_ref → InterpretationSpec.interpretation_id`✚, `run_ref → RunRecord.run_id`✚, `template_id` | 모든 주장에 `evidence_refs`([[00-overview]] §7-5) |
 | + | **AuditLog** | 영속, **append-only** (12 스키마 외) | `audit_id`(+ `seq`) | 전 스테이지 약결합 참조 | §5 |
@@ -228,6 +228,7 @@ run_record(
 observation_bundle(observation_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES run_record(run_id),
   source TEXT NOT NULL CHECK(source IN ('frozen','measured','measured-remote')),
+  collected_as_of TEXT NOT NULL,      -- 관측 시각(관측 지연 추적, [[06-reporter-observability]] §2·§7.2)
   metrics TEXT NOT NULL, logs TEXT NOT NULL, traces TEXT, costs TEXT NOT NULL, anomalies TEXT);
 -- INDEX(run_id)
 
@@ -299,7 +300,8 @@ plan_hash = "sha256:v1:" + SHA256(
 
 - **TestPlanSpec_core**: `test_type`, `hypothesis`, `param_slots`, `workload_phases`, `success_criteria`, `abort_thresholds`, `data_policy`, `template_id`, 대상(`target_service`/`target_env`/`endpoints`). 제외: 서버 발급 `plan_id`, `match_confidence`, 타임스탬프.
 - **ToolAction_core**: `tool`, `operation`, `args`, `timeout_sec`, `dry_run`, `requires_approval`, `max_cost`. 제외: `action_id`, `approval_id`, `approval_status`, `idempotency_key`(아래 순환 회피).
-- **ProvisionSpec_core**: `topology`, `control_plane_location`, `runner_location`, `runner_provider`, `target_provider`, `network_path`, `iac_tool`, `region`, `identity.mode`, `teardown_strategy`. 대상 Provider와 러너 Provider가 달라지는 cross-cloud 실행은 이 필드들이 승인 번들에 반드시 포함된다([[12-execution-topology-matrix]]).
+- **`dry_run` 불변 규칙(플립 금지)**: 승인 번들에 담기는 ToolAction은 생성 시점에 실행 모드가 고정된다. 승인 전 정적 검증은 별도의 `dry_run=true` draft 액션([[04-safety-approval-audit]] A5, 자동 허용)으로 수행하고, **승인 대상 번들에는 처음부터 `dry_run=false`인 실행 액션**을 담는다. 승인 후 `dry_run` 값을 뒤집는 경로는 존재하지 않으므로, 실행 시점 재계산 해시는 `dry_run`을 포함한 채 항상 승인값과 일치한다([[05-runners-and-mock-target]] §7.3).
+- **ProvisionSpec_core**: `topology`, `control_plane_location`, `runner_location`, `runner_provider`, `target_provider`, `network_path`, `iac_tool`, `region`, `identity`(**`mode`+`scope` 전체** — scope만 바꾸는 권한 상승 탐지), `resources`, `plan_artifact_hash`, `ttl_minutes`, `destroy_plan_required`, `teardown_strategy`. 승인 후 이들 변경은 hash 불일치로 탐지된다(승인 후 스왑 방지). 대상 Provider와 러너 Provider가 달라지는 cross-cloud 실행은 이 필드들이 승인 번들에 반드시 포함된다([[12-execution-topology-matrix]]).
 - **safe_limits**: clamp([[04-safety-approval-audit]]) 적용 후 `max_rps`/`max_vu`/`max_duration`/`max_cost`/`allowed_envs`.
 
 **정규화(normalize) 규칙** — 같은 의미면 같은 해시:
@@ -362,7 +364,7 @@ audit_log(
 | `MatchMethod` | `embedding-cosine` / `llm-classifier` / `hybrid` / `keyword` | TemplateMatch | **정정 통일**(문서 내 불일치 해소) |
 | `MatchDecision` | `auto-proceed` / `clarify` / `reject` / `route-to-expert` | TemplateMatch | τ 기반 분기([[01-architecture]] §3) |
 | `InputMode` | `template` / `generative` / `report-only` | UserIntent | 비전문가 기본 `template` |
-| `RequesterExpertise` | `nonexpert` / `expert` | UserIntent.requester_expertise | 기본 `nonexpert`; `expert`만 저신뢰 자유생성/큐레이션 경로 가능 |
+| `RequesterExpertise` | `nonexpert` / `expert` | UserIntent.requester_expertise | 기본 `nonexpert`; `expert`만 저신뢰 자유생성/큐레이션 경로 가능. **신원/역할 속성이지 자기신고 값이 아님** — 프롬프트·요청 바디에서 유래 금지, 세션 신원(로컬은 세션 상수, 사내 단계는 인증 역할)에서만 결정([[07-web-ui-api]] §2.1 인증 경계) |
 | `TestType` | `load` / `stress` / `spike` / `soak` / `breakpoint` / `report-only` | UserIntent·ScenarioTemplate·TestPlanSpec | **통일**: 원안의 `chaos-adjacent`는 로컬 범위 제외([[00-overview]] §3)→ 인식 라벨이지만 실행 불가, `reject`/`route-to-expert`로 라우팅. `report-only`는 전 스키마 공통 |
 | `Env` | `local` / `dev` / `staging` / `pre-prod` / `prod-like` / `prod` | UserIntent.target_env · ApprovalRequest.environment | 동일 enum 공유 |
 | `ToolFamily` | `k6` / `artillery` / `locust` / `jmeter` / `gatling` / `managed` / `report-only` | ScenarioTemplate | 카탈로그 폭 |
@@ -373,6 +375,7 @@ audit_log(
 | `TemplateStatus` | `draft` / `reviewed` / `active` / `deprecated` | ScenarioTemplate | `reviewed`는 engineer review 통과 후 policy review 전 상태. 검색 인덱스에는 `active`만 포함 |
 | `ObservationSource` | `frozen` / `measured` / `measured-remote` | ObservationBundle.source / ReportResponse.data_source | M3 fixture는 `frozen`, M4 목 서버 실측은 `measured`, cloud 후속은 `measured-remote` |
 | `RequiresApprovalDefault` | `always` / `by-env` / `never` | ScenarioTemplate.requires_approval_default | 템플릿 기본 승인 정책. 실제 실행 전 [[04-safety-approval-audit]]가 env·risk로 최종 판정 |
+| `IntakeSafetyVerdict` | `allow` / `deny` | IntakeResponse.safety_verdict | intake 시점 deny-first 사전 차단 결과([[07-web-ui-api]] §2.1). [[04-safety-approval-audit]] §2.1 3분류의 사영 — `deny`=DENY 술어 매치 즉시 단락, `allow`=나머지(REQUIRE_APPROVAL/AUTO_ALLOW 구분은 plan 단계 `classify`가 판정) |
 | `ApprovalStatus` | `pending` / `approved` / `rejected` / `expired` | ApprovalRequest | |
 | `RunStatus` | `queued` / `canary` / `running` / `aborting` / `aborted` / `completed` / `failed` | RunRecord | 생명주기 단일화(연구 초안 5값을 canary·aborted 포함 7값으로 확장). UI 표시는 대문자이나 영속값은 소문자([[07-web-ui-api]] §5.4) |
 | `Outcome` | `pass` / `fail` / `inconclusive` / `aborted` | InterpretationSpec | |

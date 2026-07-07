@@ -18,7 +18,7 @@
 | 안전·승인 | `docs/plan/04-safety-approval-audit.md` | deny-first, self-approval 차단, approval+plan_hash 결속 |
 | 러너·목서버 | `docs/plan/05-runners-and-mock-target.md` | `RunnerAdapter`, artifact hash, k6/Artillery, bundled mock target |
 | 리포터 | `docs/plan/06-reporter-observability.md` | read-only collector/interpreter/composer, evidence_refs fail-closed |
-| API/UI | `docs/plan/07-web-ui-api.md` | REST 12+WS 1, 6화면, plan review/approval/run/report 흐름 |
+| API/UI | `docs/plan/07-web-ui-api.md` | REST 11+WS 1, 6화면, plan review/approval/run/report 흐름 |
 | 로드맵·테스트 | `docs/plan/08-milestones-roadmap.md`, `09-testing-strategy.md` | M0~M6 순서, D9 결정성, 안전 불변식 테스트 |
 | 미해결 결정 | `docs/plan/10-open-questions-reverify.md` | LLM/임베딩, 인증/세션, 큐레이션, 후속 토폴로지 |
 | 로컬 인프라·토폴로지 | `docs/plan/11-local-container-infra.md`, `12-execution-topology-matrix.md` | L0/L1/C0/C1/X0, Docker/kind/k3d, cross-cloud 승인 조건 |

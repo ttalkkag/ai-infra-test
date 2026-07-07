@@ -100,9 +100,9 @@ M0 부트스트랩 ─ M1 데이터·안전 코어 ─ M2 엔진/매칭 ─ M3 S
   - remote compose/k3d/kind runbook(서버 bootstrap, image pull, profile mount, artifact collection)
   - L1 선택 시 source IP 고정·allowlist·egress cost 체크리스트
   - self-hosted container runner adapter 계약(`runner_location=remote-container`)
-- **검증**:
-  - 로컬 kind/k3d Job이 `mock-target` 대상에서 L0 host/Docker 실행과 동일한 결과·abort semantics를 보이는지 확인
-  - remote 대상이 `mock-target`이면 L0와 동일한 결과가 나오는지 확인
+- **검증** (비결정적 부하 측정치에 "동일"을 요구하지 않도록 허용 오차를 구분):
+  - 로컬 kind/k3d Job이 `mock-target` 대상에서 L0 host/Docker 실행과 **동등한 결과**를 보이는지 확인 — exit code·abort 전이·threshold pass/fail·산출물 스키마는 **정확 일치**, percentile 등 부하 측정치는 **허용 오차 내 일치**(초기값: p95/p99 상대 ±10%, error_rate 절대 ±0.5pp; 목 서버 시드 고정 전제)
+  - remote 대상이 `mock-target`이면 L0와 같은 기준(정확 일치 축 + 허용 오차 축)으로 동등성 확인
   - 대상이 dev/staging이면 승인·시간창·allowlist·kill switch 없이는 실행 불가
 - **제외**: 관리형 cloud load test, production, cross-cloud full run
 - **위험·완화**: "컨테이너니까 로컬"이라는 오해 → target이 cloud/dev/staging이면 승인 필수. 리포트에 self-hosted runner와 cloud-managed runner를 구분 표기.

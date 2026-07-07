@@ -27,7 +27,7 @@
 # 제어 평면. 부작용 없음(I/O는 주입된 store/llm/index를 통해서만).
 class MatchPipelineResult(BaseModel):
     intent: UserIntent
-    match: TemplateMatch
+    match: TemplateMatch | None      # 의도분류 ambiguous(clarify)면 None
     plan: TestPlanSpec | None        # decision != auto-proceed 이면 None
     clarification: list[str] | None  # 사람에게 물을 질문
 
@@ -37,8 +37,12 @@ class Orchestrator:
     def run(self, intent: UserIntent) -> MatchPipelineResult:
         self.audit.append("intent.received", intent.request_id)
 
-        # ① 의도 분류
+        # ① 의도 분류 — "ambiguous"는 TestType enum([[02-data-model]] §6) 밖의 clarify 신호다.
+        #    test_type에 대입하지 않고(CHECK 위반) 여기서 명확화로 단락한다.
         intent_label, intent_conf = self.matcher.classify_intent(intent.raw_prompt)
+        if intent_label == "ambiguous":
+            return MatchPipelineResult(intent, match=None, plan=None,
+                                       clarification=build_intent_clarification(intent))
         intent = intent.copy(update={"test_type": intent_label})
 
         # ②③ 검색 + top-k 결정 → TemplateMatch
@@ -58,7 +62,9 @@ class Orchestrator:
                                        clarification=match.clarification_questions)
 
         plan = self.strategy.assemble_plan(match, intent)      # 내부에서 safety.clamp 호출
-        self.audit.append("plan.assembled", plan.plan_id, {"plan_hash": plan.plan_hash})
+        # plan_hash는 이 단계에서 계산 불가 — ToolAction[]·ProvisionSpec 확정 후
+        # 승인 번들 생성 시점에 계산·audit된다([[04-safety-approval-audit]] §4.2)
+        self.audit.append("plan.assembled", plan.plan_id)
         return MatchPipelineResult(intent, match, plan=plan, clarification=None)
 ```
 
@@ -94,14 +100,14 @@ class Matcher:
                  ) -> list[tuple[str, float]]:        # top-k (template_id, cosine)
         ...
 
-    def rank_and_decide(self, intent: UserIntent, candidates, intent_conf
-                        ) -> TemplateMatch:
-        # τ 비교 + 단일우세 판정 + decision enum 산출 (§3)
+    def rank_and_decide(self, intent: UserIntent, candidates, conf,
+                        primary=None, agree=True) -> TemplateMatch:
+        # 교차검증(agree) → τ 비교 → 단일우세 판정 → decision enum 산출 (§3)
         ...
 
     def match(self, intent: UserIntent, intent_conf: float) -> TemplateMatch:
-        cands = self.retrieve(intent.raw_prompt, intent.test_type)
-        return self.rank_and_decide(intent, cands, intent_conf)
+        # method별로 llm_pick/conf/agree를 산출해 rank_and_decide에 전달 (§2 의사코드가 정본)
+        ...
 ```
 
 ---
@@ -136,8 +142,9 @@ def match(self, intent, intent_conf):
         agree = (llm_pick == emb_best[0])
         conf = combine(emb_best[1], llm_conf, agree)             # 일치 시 상향
         method = "hybrid"
-    else:  # embedding-cosine 단독 또는 keyword 폴백
+    else:  # embedding-cosine 단독 또는 keyword 폴백 — 교차검증 신호 없음
         llm_pick, conf, method = emb_best[0], emb_best[1], self.cfg.method
+        agree = True                       # 단일 신호 모드(불일치 개념 없음) — 미정의 참조 방지
     return self.rank_and_decide(intent, cands, conf,
                                 primary=llm_pick, agree=agree)
 ```
@@ -162,10 +169,15 @@ def match(self, intent, intent_conf):
 def rank_and_decide(self, intent, candidates, conf, primary=None, agree=True):
     top = candidates[:self.cfg.k]
     margin = (top[0][1] - top[1][1]) if len(top) >= 2 else top[0][1] if top else 0.0
-    if not top or conf < self.cfg.tau_low:
+    if top and not agree:
+        # hybrid 불일치는 τ_low 검사보다 먼저 판정한다 — combine()의 0.49 캡(§2)이
+        # reject/route-to-expert로 새지 않고, 결정 표의 "hybrid disagree → clarify"
+        # (top-k 후보 제시 + 사람 선택, [[07-web-ui-api]] §3 분기 A)로 간다
+        decision, matched = "clarify", None
+    elif not top or conf < self.cfg.tau_low:
         decision = "route-to-expert" if intent.requester_expertise == "expert" else "reject"
         matched = None
-    elif conf >= self.cfg.tau_high and margin >= self.cfg.margin_min and agree:
+    elif conf >= self.cfg.tau_high and margin >= self.cfg.margin_min:
         decision, matched = "auto-proceed", (primary or top[0][0])
     else:
         decision, matched = "clarify", None
@@ -273,7 +285,7 @@ def structured(self, prompt, *, schema):
 
 ## 6. ScenarioTemplate 레지스트리 (YAML)
 
-템플릿은 `templates/*.yaml`로 **버전관리 대상**이며([[01-architecture]] §4), 코드 배포와 분리해 검수·롤백한다. `templates/_schema.md`가 스키마를 문서화한다.
+템플릿은 `templates/*.yaml`로 **버전관리 대상**이며([[01-architecture]] §4), 코드 배포와 분리해 검수·롤백한다. `templates/_schema.md`가 스키마를 문서화한다. 로더는 draft를 포함한 모든 템플릿·프로파일 YAML(`templates/*.yaml`, `mock_profile.yaml`)을 **`yaml.safe_load`로만 파싱**한다 — 비안전 로더(`yaml.load`)는 악성 YAML 태그로 파싱 시점 코드 실행이 가능하므로 금지(리뷰 이전 draft도 파싱되는 점에 유의).
 
 ### 6.1 파일 구조·필드
 
@@ -302,7 +314,7 @@ safe_limits:                   # 검증된 안전 한계(비전문가 우회 불
   max_duration_sec: 3600
   max_cost: 0
   allowed_envs: [staging, pre-prod, prod-like]
-target_whitelist: []           # 허용 타이틀(비면 env allowlist만 적용)
+target_whitelist: []           # 허용 대상(비면 env 기본 대상만 — "전부 허용" 아님, [[04-safety-approval-audit]] §3.2)
 default_slo: {p95_ms: 300, p99_ms: 800, error_rate: 0.01}
 requires_approval_default: by-env   # always/by-env/never (prod=always)
 status: active                 # draft/reviewed/active/deprecated

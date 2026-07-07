@@ -2,7 +2,7 @@
 
 > 작성일: 2026-06-27 (Asia/Seoul). 기준일(웹 검증): 2026-06-27.
 > 목적: 클라우드 실행이 **주목적**이되, 그 전에 **컨테이너(Docker 등)로 로컬에서** (a) 목 타깃에 실제 부하를 가하고, (b) 클라우드 IaC·오케스트레이션 **구조**를 비용 0으로 사전 검증하는 방법을 정리한다.
-> 정합성: `docs/plan/05-runners-and-mock-target.md`(러너/목서버), `docs/report.md` §0·§3.4(이미 확정된 `docker/compose.local.yml`의 `app`/`mock-target`/`runner-tools` 3서비스, host-native+Docker 병행), `docs/research/02`(실행 루프=K8s Job), `docs/research/04`(LGTM 관측 스택), `docs/plan/10` B6/B7, `docs/plan/12-execution-topology-matrix.md`의 L0/L1 토폴로지를 확장한다.
+> 정합성: `docs/plan/05-runners-and-mock-target.md`(러너/목서버), `docs/report.md` §0·§2(M0에서 확정된 `docker/compose.local.yml`의 `app`/`mock-target`/`runner-tools` 3서비스, host-native+Docker 병행은 plan/10 B6), `docs/research/02`(실행 루프=K8s Job), `docs/research/04`(LGTM 관측 스택), `docs/plan/10` B6/B7, `docs/plan/12-execution-topology-matrix.md`의 L0/L1 토폴로지를 확장한다.
 > 모든 외부 사실은 웹 검색·공식 문서로 확인했다(§12 출처). 본 문서는 자료 수집·구성안이며 실제 IaC/코드는 포함하지 않는다.
 
 ---
@@ -69,7 +69,7 @@
 
 ## 4. 목 타깃 컨테이너 (유일한 로컬 실부하 대상)
 
-- **스택**: FastAPI/Starlette 단일 앱(이미 백엔드 스택과 동일, report §3.4 확정). WS `/realtime`은 Starlette WebSocket.
+- **스택**: FastAPI/Starlette 단일 앱(이미 백엔드 스택과 동일, [[05-runners-and-mock-target]] §6.1 확정). WS `/realtime`은 Starlette WebSocket.
 - **결정성**: 시드 고정 RNG(`random.Random(seed)`) + 세마포어/토큰버킷으로 지연분포·M/M/1 큐·에러율·동시성을 주입(요청 헤더/엔드포인트로 제어). 같은 입력 → 같은 출력(골든 테스트).
 - **컨테이너화 이점**: 리소스 제한으로 "SUT 한계"를 의도적으로 만들어 stress/breakpoint/생성기-병목 분리를 로컬에서 재현. compose 서비스라 1커맨드 기동.
 - **불변식**: 로컬 부하는 **목 타깃에만**. 외부/실서비스 엔드포인트는 정책으로 금지(05 §9, 04 §2.4 매핑표).
@@ -145,7 +145,7 @@
 
 ## 8. docker compose 구성안 (프로파일 분리)
 
-`docker/compose.local.yml`(report §3.4에서 확정)을 **compose profiles**로 계층화한다.
+`docker/compose.local.yml`(report §2 M0에서 확정)을 **compose profiles**로 계층화한다.
 
 | profile | 서비스 | 용도 |
 |---|---|---|

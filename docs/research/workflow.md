@@ -316,8 +316,8 @@ flowchart LR
 | 도구(01) | k6 2.0 MCP=preview·`k6 x agent`=stable 상태, Grafana k6 provider 리소스 스키마, AWS DLT 최신 버전/번들 엔진, Azure 지원 엔진/region |
 | Terraform(02) | MCP Server 1.0.x read/write 경계·`ENABLE_TF_OPERATIONS`·보안 기본값, HCP 단계 정밀 순서, write-only provider 지원, OpenTofu 암호화 알고리즘 |
 | 오케스트레이션(03) | OpenAI Sandbox=beta(GA 재확인), LangGraph 노드 재실행 멱등, durable state 저장 백엔드 책임 분담, **τ_high/τ_low 임계 오프라인 보정**(거짓매칭 vs 불필요 명확화 트레이드오프) |
-| SLO(04) | k6 버전 고정 후 옵션 문법, burn-rate 윈도, 클라이언트(k6) vs 서버(OTel/Prom) percentile 정합, **Firestore/RTDB/Cloud Run 한도 수치(미확정분)·게임 tick rate 메트릭 실측** |
-| 안전(05) | NIST AI 600-1 최종본 URL, GitHub required reviewers 플랜 제약, 클라우드 사업자 부하/DoS 정책(AWS Simulated Events·Azure ROE·**GCP AUP**), **BaaS 테스트 전용 프로젝트 격리·App Check 영향** |
+| SLO(04) | k6 버전 고정 후 옵션 문법, 클라이언트(k6) vs 서버(OTel/Prom) percentile 정합, **Firestore/RTDB/Cloud Run 한도 수치(미확정분)·게임 tick rate 메트릭 실측** — burn-rate 윈도는 **30일 확정·반영 완료**(`docs/plan/10` A-1), 재검증 불요 |
+| 안전(05) | GitHub required reviewers 플랜 제약, 클라우드 사업자 부하/DoS 정책(AWS Simulated Events·Azure ROE·**GCP AUP**), **BaaS 테스트 전용 프로젝트 격리·App Check 영향** — NIST AI 600-1 최종본 URL은 **확정·반영 완료**(`docs/research/05` §2 레지스트리), 후속판 발행 여부만 일반 재확인 |
 | BaaS/대상(01·02) | Firestore 실시간=gRPC/WebChannel·RTDB=WebSocket 재현 경로, k6 ws/grpc/browser·Artillery 엔진 버전, **Firebase는 `google-beta` provider·RTDB 규칙/MFA/기본 Storage 버킷 TF 미지원** |
 
 ---

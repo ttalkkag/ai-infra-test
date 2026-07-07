@@ -91,7 +91,7 @@
 | `TemplateMatch.match_method` enum | **`embedding-cosine`/`llm-classifier`/`hybrid`/`keyword`로 통일** ([[02-data-model]]) |
 | k6-learn 직접 인용 문구 | 개념은 정확하나 verbatim 아님 → **의역 표기**로 |
 
-> 정확성 확인된 핵심 사실: Terraform MCP 1.0 GA(2026-06-11)·saved plan=승인·write-only(v1.11+)·HCP cost는 Sentinel만 접근, Grafana k6 Terraform 리소스 6종 실재, Gatling/AWS DLT MCP=read-only, Azure LT=JMeter/Locust만, Firebase 예산 알림은 사용을 cap하지 않음, Firestore 500/50/5·RTDB 200k·Cloud Run max 100, OpenAI Sandbox=beta·Structured Outputs/Embeddings 동작, Anthropic routing·인젝션 방어 가이드 — 모두 공식 문서와 일치.
+> 정확성 확인된 핵심 사실: Terraform MCP 1.0 GA(2026-06-11)·saved plan=승인·write-only(v1.11+)·HCP cost는 Sentinel만 접근, Grafana k6 Terraform 리소스 6종 실재, Gatling/AWS DLT MCP=read-only, Azure LT=JMeter/Locust만, Firebase 예산 알림은 사용을 cap하지 않음, Firestore 500/50/5·RTDB 200k(하드 한계)·Cloud Run은 revision **기본** max instances 100(설정·quota로 변경 가능 — 하드 한계 아님), OpenAI Sandbox=beta·Structured Outputs/Embeddings 동작, Anthropic routing·인젝션 방어 가이드 — 모두 공식 문서와 일치.
 
 ---
 

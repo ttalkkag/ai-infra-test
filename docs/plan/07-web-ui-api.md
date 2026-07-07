@@ -33,7 +33,7 @@
 
 | Method · Path | 요청 스키마 | 응답 스키마 | 권한 | 평면 | 멱등/비고 |
 |---|---|---|---|---|---|
-| `POST /intake` | `IntakeRequest{ prompt, locale?, session_id? }` | `IntakeResponse{ intent_id, UserIntent, safety_verdict }` | planner | 제어 | 모호 필드 추정 금지. `safety_verdict ∈ {allow, deny}`([[04-safety-approval-audit]] §2); 위험 신호 시 `deny`로 즉시 단락 |
+| `POST /intake` | `IntakeRequest{ prompt, locale?, session_id? }` | `IntakeResponse{ intent_id, UserIntent, safety_verdict }` | planner | 제어 | 모호 필드 추정 금지. `safety_verdict ∈ {allow, deny}`(=`IntakeSafetyVerdict`, [[02-data-model]] §6) — [[04-safety-approval-audit]] §2.1 3분류의 intake 시점 사영: DENY 술어 매치 → `deny` 즉시 단락, 그 외 `allow`(승인 필요 여부는 plan 단계 `classify`가 판정) |
 | `POST /match` | `MatchRequest{ intent_id, k?=3 }` | `MatchResponse{ decision, candidates: TemplateMatch[], classification }` | planner | 제어 | `decision ∈ {auto-proceed, clarify, reject, route-to-expert}`(=`MatchDecision`, [[02-data-model]] §6) (§6.2) |
 | `POST /slots` | `SlotsRequest{ intent_id, template_choice?, slot_values?{} }` | `SlotsResponse{ status, filled_slots{}, missing_slots[], clamp_notes[], validation_errors[] }` | planner | 제어 | `status ∈ {needs_input, ready}`. 명확화 답변(`template_choice`)·슬롯 채움 모두 이 엔드포인트 |
 | `POST /plan` | `PlanRequest{ intent_id, template_id, slot_values{} }` | `PlanResponse` = **Plan Review Bundle**`{ plan_id, plan_hash, UserIntent, TemplateMatch, TestPlanSpec, ToolAction[], safety_judgement, blast_radius, cost_estimate, ApprovalRequest(pending) }` | planner | 제어 | `plan_hash = sha256(canonical(bundle))`. 동일 입력 → 동일 `plan_hash`(결정성) |
@@ -47,6 +47,8 @@
 | `GET /runs` | `?baseline=<run_id>&limit=&intent=` | `RunListResponse{ items: RunRecord[], baseline?: RunRecord, delta?{} }` | viewer | 읽기 | `baseline` 지정 시 p95/error_rate 등 delta 동봉([[06-reporter-observability]]) |
 
 > 권한 모델: 로컬 단일 사용자 MVP에서는 4개 역할(`viewer`/`planner`/`approver`/`operator`)이 한 사용자에 합쳐질 수 있으나, **계약은 분리를 보존**한다(클라우드/사내 단계에서 분리 적용, [[00-overview]] D2·D11). 실행 평면(`/run`, WS kill)은 항상 `operator` 권한을 별도로 확인한다.
+>
+> 인증 경계(로컬 MVP): 별도 인증 백엔드가 없는 동안 app은 **`127.0.0.1` 전용 바인딩을 강제**하고(Docker 모드 포함 — 포트 게시를 loopback으로 제한, [[05-runners-and-mock-target]] §7.2), 이를 명시적 신뢰 경계로 둔다. `requester`/`approver` 신원은 로컬 세션 상수에서 온다(`docs/report.md` §7-3). **인증되지 않은 자기신고 신원 위에서는 self-approval 차단([[04-safety-approval-audit]] §4.4)이 실수 방지 수준**임을 한계로 명시한다 — 네트워크 노출·멀티유저 사용은 토큰/세션 인증 도입([[10-open-questions-reverify]] §C-4) 전까지 금지.
 
 ### 2.2 WebSocket `/run/{run_id}/stream`
 
@@ -317,12 +319,21 @@ ApiError { code: string, message: string, detail?: object, retriable: bool }
        ┌────────┐  start    ┌────────┐  pass    ┌─────────┐  finish   ┌───────────┐
        │ Queued │ ───────▶ │ Canary │ ──────▶ │ Running │ ───────▶ │ Completed │ (terminal)
        └────────┘           └────────┘          └─────────┘           └───────────┘
-           │                    │ fail               │
-           │ kill               ▼                    │ kill
-           ▼                ┌────────┐               ▼
-       ┌──────────┐         │ Failed │ (terminal) ┌──────────┐  drained  ┌─────────┐
-       │ Aborting │◀────────┴────────┘            │ Aborting │ ────────▶ │ Aborted │ (terminal)
-       └──────────┘   error                       └──────────┘            └─────────┘
+           │ kill            │      │ fail        │ error    │ kill / ceiling
+           │            kill │      ▼             ▼          │
+           │                 │   ┌─────────────────────┐     │
+           │                 │   │       Failed        │     │
+           │                 │   │     (terminal)      │     │
+           │                 │   └─────────────────────┘     │
+           ▼                 ▼                               ▼
+       ┌─────────────────────────────────────────────────────────┐
+       │                        Aborting                         │
+       └────────────────────────────┬────────────────────────────┘
+                                    │ drained
+                                    ▼
+                               ┌─────────┐
+                               │ Aborted │ (terminal)
+                               └─────────┘
 ```
 
 | 상태 | 진입 트리거 | UI | 허용 명령 |
